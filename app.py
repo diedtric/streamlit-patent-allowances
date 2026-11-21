@@ -110,7 +110,17 @@ def main():
     if pending.empty:
         st.info("No pending applications match the current filters.")
     else:
-        st.dataframe(pending, hide_index=True, width="stretch")
+        pending_display = pending.copy()
+        indicator = "Status indicator"
+        pending_display.insert(pending.columns.get_loc(MAILED) + 1, indicator, pending[STATUS])
+        status_colors = {
+            "Awaiting examination": "background-color: #bbf7d0; color: #14532d",
+            "Non-final Office Action mailed": "background-color: #fef08a; color: #422006",
+        }
+        styled_pending = pending_display.style.map(
+            lambda status: status_colors.get(status, ""), subset=[indicator],
+        )
+        st.dataframe(styled_pending, hide_index=True, width="stretch")
         st.download_button(
             "Download pending CSV", csv_bytes(pending),
             file_name="pending_applications.csv", mime="text/csv",
