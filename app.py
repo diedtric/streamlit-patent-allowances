@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from patent_data import (
-    APPLICATION, CLAIMS, CPC, MAILED, PARTIES, STATUS, TITLE,
+    APPLICATION, CLAIMS, CPC, MAILED, NOT_MAILED, PARTIES, STATUS, TITLE,
     csv_bytes, document_links, load_csv,
 )
 
@@ -22,6 +22,10 @@ def allowance_chart(table, start, end, group):
         dates = pd.date_range(start, end).strftime("%Y-%m-%d").tolist()
         counts = table[group].value_counts().reindex(dates, fill_value=0)
         sort_order = dates
+    elif group == "Applicant":
+        applicants = table[PARTIES].str.split("|", n=1, regex=False).str[0].str.strip()
+        counts = applicants.replace("", "Unspecified").value_counts().head(12)
+        sort_order = "-y"
     else:
         counts = table[group].replace("", "Unspecified").value_counts().head(12)
         sort_order = "-y"
@@ -52,10 +56,12 @@ def main():
     else:
         st.caption(f"Source file · {uploaded.name}")
 
-    earliest = date.fromisoformat(table[MAILED].min())
-    latest = date.fromisoformat(table[MAILED].max())
+    allowances = table[table[MAILED] != NOT_MAILED]
+    earliest = date.fromisoformat(allowances[MAILED].min()) if not allowances.empty else date.today()
+    latest = date.fromisoformat(allowances[MAILED].max()) if not allowances.empty else earliest
     with st.sidebar:
-        end = st.date_input("Week ending", value=latest, min_value=earliest, max_value=latest)
+        end = st.date_input("Week ending", value=latest, min_value=earliest, max_value=latest,
+                            disabled=allowances.empty)
         statuses = st.multiselect(
             "Current application status", sorted(set(table[STATUS]) - {""}),
         )
@@ -65,24 +71,27 @@ def main():
         )
 
     start = end - timedelta(days=6)
-    st.subheader(f"{start:%b %d, %Y} – {end:%b %d, %Y}")
     term = st.text_input("Search title, application number, applicant, assignee or CPC").strip()
-    filtered = table[table[MAILED].between(start.isoformat(), end.isoformat())]
     if statuses:
-        filtered = filtered[filtered[STATUS].isin(statuses)]
+        table = table[table[STATUS].isin(statuses)]
     if term:
-        searchable = filtered[[TITLE, APPLICATION, PARTIES, CPC]]
+        searchable = table[[TITLE, APPLICATION, PARTIES, CPC]]
         matches = searchable.apply(lambda column: column.str.contains(term, case=False, regex=False))
-        filtered = filtered[matches.any(axis=1)]
+        table = table[matches.any(axis=1)]
+    pending = table[table[MAILED] == NOT_MAILED]
+    filtered = table[table[MAILED].between(start.isoformat(), end.isoformat())]
+    st.subheader(f"Allowances · {start:%b %d, %Y} – {end:%b %d, %Y}")
 
     left, right = st.columns(2)
     left.metric("Allowance records", len(filtered))
     right.metric("Unique applications", filtered.loc[filtered[APPLICATION] != "", APPLICATION].nunique())
 
     group = st.selectbox(
-        "Group chart by", [MAILED, STATUS, CPC],
+        "Group chart by", [MAILED, "Applicant", STATUS, CPC],
         format_func=lambda field: "Mailing date" if field == MAILED else field,
     )
+    if group == "Applicant":
+        st.caption("Up to 12 applicants by allowance count.")
     if group == CPC:
         st.caption("Up to 12 classification entries. Multiple codes in one cell appear together.")
     st.altair_chart(allowance_chart(filtered, start, end, group), width="stretch")
@@ -96,9 +105,21 @@ def main():
         file_name=f"{'sample-' if uploaded is None else ''}allowances-{end}.csv",
         mime="text/csv", disabled=filtered.empty,
     )
-    if uploaded is not None and not filtered.empty:
+    st.subheader("Pending applications")
+    st.caption("Applications awaiting a Notice of Allowance across all filing dates.")
+    if pending.empty:
+        st.info("No pending applications match the current filters.")
+    else:
+        st.dataframe(pending, hide_index=True, width="stretch")
+        st.download_button(
+            "Download pending CSV", csv_bytes(pending),
+            file_name="pending_applications.csv", mime="text/csv",
+        )
+
+    document_rows = pd.concat([filtered, pending])
+    if uploaded is not None and not document_rows.empty:
         st.subheader("USPTO documents")
-        options = filtered.reset_index(drop=True)
+        options = document_rows.reset_index(drop=True)
         index = st.selectbox(
             "Select a record", options.index,
             format_func=lambda i: f"{options.at[i, APPLICATION]} · {options.at[i, TITLE]}",

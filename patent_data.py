@@ -4,6 +4,7 @@ import re
 
 import pandas as pd
 
+NOT_MAILED = "Not yet mailed"
 MAILED = "Notice of Allowance mailing date"
 APPLICATION = "U.S. application number"
 CLAIMS = "Allowed claims"
@@ -31,10 +32,12 @@ def load_csv(source):
     for name in COLUMNS:
         table[name] = table[name].str.strip()
     dates = pd.to_datetime(table[MAILED], format="%Y-%m-%d", errors="coerce")
-    if dates.isna().any():
-        bad_rows = ", ".join(str(index + 2) for index in dates[dates.isna()].index[:5])
-        raise ValueError(f"Use YYYY-MM-DD mailing dates. Check CSV row numbers {bad_rows}.")
-    table[MAILED] = dates.dt.strftime("%Y-%m-%d")
+    pending = table[MAILED].str.casefold().isin(["", NOT_MAILED.casefold()])
+    invalid = dates.isna() & ~pending
+    if invalid.any():
+        bad_rows = ", ".join(str(index + 2) for index in dates[invalid].index[:5])
+        raise ValueError(f"Use YYYY-MM-DD mailing dates or {NOT_MAILED}. Check CSV row numbers {bad_rows}.")
+    table[MAILED] = dates.dt.strftime("%Y-%m-%d").fillna(NOT_MAILED)
     return table.sort_values(MAILED, ascending=False, kind="stable")
 
 
